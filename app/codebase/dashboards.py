@@ -8,12 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from app.core.logging import logger
-from app.dbmodels.dashboard_models import Dashboard, DashboardVersion, VersionStatus
+from app.dbmodels.dashboard_models import Dashboard, DashboardVersion, VersionStatus, DashboardGroup
 from app.dbmodels.features_models import Share
 from app.schemas.dashboards_schema import (
     DashboardCreateSchema,
     DashboardUpdateContentSchema,
     DashboardUpdateDetailsSchema,
+    DashboardGroupCreateSchema
 )
 
 
@@ -410,6 +411,7 @@ class CoreDashboard:
                     "current_published_version_id": dashboard.current_published_version_id,
                     "current_draft_version_id": dashboard.current_draft_version_id,
                     "owner_id": dashboard.owner_id,
+                    "group_id":dashboard.group_id,
                     "project_id": dashboard.project_id,
                     "workspace_id": dashboard.workspace_id,
                     "created_at": dashboard.created_at,
@@ -456,7 +458,7 @@ class CoreDashboard:
             )
             has_next = (page < total_pages_owned) or (page < total_pages_shared)
 
-            return {
+            individual_dashboards = {
                 "my_dashboards": my_dashboards_list,
                 "shared_with_me": shared_with_me_list,
                 "shared_by_me": shared_by_me_list,
@@ -467,7 +469,139 @@ class CoreDashboard:
                     "total_shared": total_shared,
                     "total_results": total_results,
                     "has_next": has_next,
+                }
+            }
+
+
+
+
+            # Query 1: Get all groups owned by user with shares eager loading
+            owned_groups_stmt = (
+                select(DashboardGroup)
+                .options(joinedload(DashboardGroup.shares))
+                .where(
+                    and_(
+                        DashboardGroup.owner_id == user_id,
+                    )
+                )
+            )
+            owned_group_result = await session.execute(owned_groups_stmt)
+            owned_groups = owned_group_result.scalars().unique().all()
+
+            # Query 2: Get dashboards shared with user via share table
+            # Get all entity IDs that can have access to this user
+            user_entities = [user_id]
+            if team_ids:
+                user_entities.extend(team_ids)
+            if project_ids:
+                user_entities.extend(project_ids)
+            if workspace_ids:
+                user_entities.extend(workspace_ids)
+
+            # Apply pagination limits
+            offset = (page - 1) * page_size
+            limit = page_size
+
+            shared_dashboards_stmt = (
+                select(DashboardGroup)
+                .options(joinedload(DashboardGroup.shares))
+                .join(Share)
+                .where(
+                    and_(
+                        Share.entity_id.in_(user_entities),
+                        # Dashboard.deleted_at.is_(None),
+                        DashboardGroup.owner_id != user_id,  # Exclude user's own dashboards
+                    )
+                )
+                .offset(offset)
+                .limit(limit)
+            )
+            shared_dashboards_result = await session.execute(shared_dashboards_stmt)
+            shared_dashboards = shared_dashboards_result.scalars().unique().all()
+
+            # Count total for pagination
+            count_stmt = (
+                select(func.count(DashboardGroup.group_id))
+                .join(Share)
+                .where(
+                    and_(
+                        Share.entity_id.in_(user_entities),
+                        # Dashboard.deleted_at.is_(None),
+                        DashboardGroup.owner_id != user_id,
+                    )
+                )
+            )
+            count_result = await session.execute(count_stmt)
+            total_shared = count_result.scalar() or 0
+
+            # Transform dashboard objects to response format
+            def transform_dashboard(group: DashboardGroup) -> dict:
+                return {
+                    "group_id": group.group_id,
+                    "name": group.name,
+                    "description": group.description,
+                    "owner_id": group.owner_id,
+                    "dashboard_ids":group.dashboard_ids,
+                    "project_id": group.project_id,
+                    "workspace_id": group.workspace_id,
+                    "created_at": group.created_at,
+                    "updated_at": group.updated_at,
+                }
+
+            # Categorize owned dashboards programmatically
+            my_groups_list = []
+            shared_by_me_list = []
+
+            # Apply pagination to owned dashboards
+            owned_groups_paginated = owned_groups[offset : offset + limit]
+
+            for group in owned_groups_paginated:
+                group_dict = transform_dashboard(group)
+                has_shares = bool(group.shares)  # Use eager loaded shares
+
+                if has_shares:  # Has shares = shared_by_me
+                    shared_by_me_list.append(group_dict)
+                else:  # No shares = my_dashboards (private)
+                    my_groups_list.append(group_dict)
+
+            # Count total owned dashboards for pagination
+            total_owned = len(owned_groups)
+
+            # Transform shared dashboards
+            shared_with_me_list = [transform_dashboard(d) for d in shared_dashboards]
+
+            # Calculate pagination info
+            total_results = (
+                len(my_groups_list)
+                + len(shared_with_me_list)
+                + len(shared_by_me_list)
+            )
+            total_pages_owned = (
+                (total_owned + page_size - 1) // page_size if total_owned > 0 else 1
+            )
+            total_pages_shared = (
+                (total_shared + page_size - 1) // page_size if total_shared > 0 else 1
+            )
+            has_next = (page < total_pages_owned) or (page < total_pages_shared)
+
+
+            grouped_dashboards = {
+                "my_groups": my_groups_list,
+                "shared_with_me": shared_with_me_list,
+                "shared_by_me": shared_by_me_list,
+                "pagination": {
+                    "page": page,
+                    "page_size": page_size,
+                    "total_owned": total_owned,
+                    "total_shared": total_shared,
+                    "total_results": total_results,
+                    "has_next": has_next,
                 },
+            }
+            
+            return {
+                "individual_dashboards":individual_dashboards,
+                "grouped_dashboards":grouped_dashboards
             }
 
         except Exception as e:
@@ -586,5 +720,46 @@ class CoreDashboard:
 
         except Exception as e:
             logger.error(f"Error fetching dashboard by id: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
+ 
+    @staticmethod
+    async def create_group_dashboards(
+        session: AsyncSession, group_dashboards_data: DashboardGroupCreateSchema, user_id: uuid.UUID
+    ):
+        try:
+            # 1. Fetch the actual Dashboard objects for the IDs in the request
+            # This is required for the Many-to-Many relationship table to work
+            dashboards_to_link = []
+            if group_dashboards_data.dashboardIds:
+                stmt = select(Dashboard).where(
+                    Dashboard.dashboard_id.in_(group_dashboards_data.dashboardIds)
+                )
+                db_result = await session.execute(stmt)
+                dashboards_to_link = db_result.scalars().all()
+
+            # 2. Create the new DashboardGroup
+            new_group = DashboardGroup(
+                name=group_dashboards_data.name,
+                description=group_dashboards_data.description,
+                group_type=group_dashboards_data.group_type,
+                owner_id=user_id,
+                workspace_id=group_dashboards_data.workspace_id,
+                project_id=group_dashboards_data.project_id,
+                # This handles the relationship/link table
+                dashboards=dashboards_to_link,
+                # This populates the list/array column if you kept it in the schema
+                dashboard_ids=group_dashboards_data.dashboardIds 
+            )
+
+            session.add(new_group)
+            
+            # Flush so we have the group_id available for the return
+            await session.flush()
+
+            return new_group
+
+        except Exception as e:
+            logger.error(f"Error creating dashboard group: {str(e)}")
             logger.error(traceback.format_exc())
             raise

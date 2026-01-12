@@ -46,13 +46,14 @@ class Share(Base):
     share_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    dashboard_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("dashboards.dashboard_id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
+    dashboard_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("dashboards.dashboard_id", ondelete="CASCADE"), nullable=True
     )
 
+    #  Group ID for sharing groups
+    group_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("dashboard_groups.group_id", ondelete="CASCADE"), nullable=True
+    )
     # Who shared this dashboard
     shared_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -101,6 +102,7 @@ class Share(Base):
     dashboard = relationship(
         "Dashboard", back_populates="shares", foreign_keys=[dashboard_id]
     )
+    group = relationship("DashboardGroup", back_populates="shares", foreign_keys=[group_id])
 
     __table_args__ = (
         # Prevent duplicate shares for same entity

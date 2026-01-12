@@ -8,6 +8,7 @@ from app.schemas.dashboards_schema import (
     DashboardCreateSchema,
     DashboardUpdateContentSchema,
     DashboardUpdateDetailsSchema,
+    DashboardGroupCreateSchema
 )
 from app.services.dashboard_service import DashboardService
 
@@ -168,5 +169,19 @@ async def publish_dashboard(
 
     result = await dashboard_service.publish_dashboard(
         user_info=current_user, dashboard_id=dashboard_uuid
+    )
+    return result
+
+@router.post("/create_group_dashboards")
+async def create_group_dashboards(
+    group_dashboards_data: DashboardGroupCreateSchema,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Create a new Group For dashboard
+    """
+    result = await dashboard_service.create_group_dashboards(
+        user_info=current_user,
+        group_dashboards_data=group_dashboards_data,
     )
     return result

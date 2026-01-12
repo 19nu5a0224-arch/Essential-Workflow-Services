@@ -27,6 +27,7 @@ from app.schemas.dashboards_schema import (
     DashboardCreateSchema,
     DashboardUpdateContentSchema,
     DashboardUpdateDetailsSchema,
+    DashboardGroupCreateSchema
 )
 from app.services.permission_service import PermissionService
 from app.services.widget_locking_service import WidgetLockingService
@@ -680,5 +681,92 @@ class DashboardService:
             )
             raise HTTPException(
                 status_code=500,
+                detail="Internal server error",
+            )
+
+    @staticmethod
+    async def create_group_dashboards(
+        user_info: Any,
+        group_dashboards_data: DashboardGroupCreateSchema,
+    ) -> Any:
+        """
+        Create a new Group For Dashboards.
+
+        Args:
+            user_info: User information object
+            group_dashboards_data: Dashboard Group creation data
+
+        Returns:
+            Result from CoreDashboard.create_group_dashboards()
+        """
+        # Check user permission first - outside try block to avoid catching HTTPException
+        has_permission = await PermissionService.check_create_dashboard(
+            user_info=user_info,
+            project_id=str(group_dashboards_data.project_id)
+            if group_dashboards_data.project_id
+            else None,
+            workspace_id=str(group_dashboards_data.workspace_id)
+            if group_dashboards_data.workspace_id
+            else None,
+        )
+
+        if not has_permission:
+            # Create contextual error message based on what was provided
+            if group_dashboards_data.project_id and group_dashboards_data.workspace_id:
+                detail = "You don't have permission to create dashboard in this project or workspace"
+            elif group_dashboards_data.project_id:
+                detail = "You don't have permission to create dashboard in this project"
+            elif group_dashboards_data.workspace_id:
+                detail = (
+                    "You don't have permission to create dashboard in this workspace"
+                )
+            else:
+                detail = "You don't have permission to create dashboard"  # Should not happen due to schema validation
+
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=detail,
+            )
+
+        try:
+            async with db_manager.session() as session:
+                result = await CoreDashboard.create_group_dashboards(
+                    session=session,
+                    group_dashboards_data=group_dashboards_data,
+                    user_id=user_info["id"],
+                )
+                activity_log = ActivityLog(
+                    entity_type=EntityType.DASHBOARD_GROUP,
+                    entity_id=result.group_id,
+                    user_id=result.owner_id,
+                    username=user_info["username"],
+                    action_type=ActionType.DASHBOARD_CREATED,
+                    description=f"Group Created by using {group_dashboards_data.name} dashboards",
+                    activity_metadata={
+                        "group_id": str(result.group_id),
+                        "group_name": group_dashboards_data.name,
+                        "dashboard_count": len(group_dashboards_data.dashboardIds)
+                    },
+                )
+                session.add(activity_log)
+                await session.commit()
+                await session.refresh(result)
+
+                # Invalidate cache using tags
+                cache_manager = await get_cache()
+                await cache_manager.delete_multi_level_by_tags(
+                    f"collection:dashboard:user:{user_info['id']}",
+                    f"resource:dashboard",
+                )
+
+                return result
+
+        except Exception as e:
+            logger.error("=" * 50 + " Error in create_group_dashboards " + "=" * 50)
+            logger.error(f"Error: {str(e)}")
+            logger.error(f"Traceback:\n{traceback.format_exc()}")
+            logger.error("=" * 50 + " Error ended in create_group_dashboards " + "=" * 50)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Internal server error",
             )

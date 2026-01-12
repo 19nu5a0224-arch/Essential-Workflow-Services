@@ -4,9 +4,14 @@ Pydantic schemas for Dashboard API requests.
 
 import uuid
 from typing import Any, Dict, List, Optional
-
+from uuid import UUID
 from pydantic import BaseModel, Field, field_validator, model_validator
+from enum import Enum
 
+class DashboardType(str, Enum):
+    mine = 'mine'
+    sharedWithMe = 'sharedWithMe'
+    sharedByMe = 'sharedByMe'
 
 class DashboardCreateSchema(BaseModel):
     """Schema for creating a new dashboard."""
@@ -138,3 +143,80 @@ class DashboardUpdateContentSchema(BaseModel):
                 widget["widget_id"] = str(uuid.uuid4())
 
         return v
+
+
+class DashboardGroupCreateSchema(BaseModel):
+    """Schema for creating a new Group."""
+
+    name: str = Field(
+        ..., min_length=1, max_length=255, description="Name of the Group"
+    )
+    description: Optional[str] = Field(
+        None, max_length=5000, description="Description of the Group"
+    )
+
+    group_type: DashboardType = Field(
+        ..., description="Type of Dashboard: 'mine', 'sharedWithMe', or 'sharedByMe'"
+    )
+
+    project_id: Optional[uuid.UUID] = Field(
+        None, description="Project ID to associate dashboard with"
+    )
+    workspace_id: Optional[uuid.UUID] = Field(
+        None, description="Workspace ID to associate dashboard with"
+    )
+
+    dashboardIds: List[UUID] = Field(
+        default_factory=list, description="List of Dashboard UUIDs"
+    )
+    
+
+
+    # @model_validator(mode="after")
+    # def validate_project_or_workspace(self):
+    #     """Ensure at least one of project_id or workspace_id is provided."""
+    #     if self.project_id is None and self.workspace_id is None:
+    #         raise ValueError(
+    #             "At least one of project_id or workspace_id must be provided"
+    #         )
+    #     return self
+
+    # @field_validator("name")
+    # @classmethod
+    # def validate_name(cls, v: str) -> str:
+    #     """Validate dashboard name."""
+    #     v = v.strip()
+    #     if not v:
+    #         raise ValueError("Dashboard name cannot be empty or whitespace")
+    #     return v
+
+    # @field_validator("content", mode="before")
+    # @classmethod
+    # def ensure_widget_ids(cls, v: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    #     """Ensure all widgets have widget_id, generating UUIDs if missing."""
+    #     if not isinstance(v, list):
+    #         raise ValueError("Content must be a list of widgets")
+
+    #     for widget in v:
+    #         if not isinstance(widget, dict):
+    #             raise ValueError("All widgets must be dictionaries")
+    #         if "widget_id" not in widget or not widget["widget_id"]:
+    #             widget["widget_id"] = str(uuid.uuid4())
+
+    #     return v
+
+    # @field_validator("content")
+    # @classmethod
+    # def validate_content(cls, v: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    #     """Validate content structure after widget_id generation."""
+    #     if not isinstance(v, list):
+    #         raise ValueError("Content must be a list of widgets")
+
+    #     for idx, widget in enumerate(v):
+    #         if not isinstance(widget, dict):
+    #             raise ValueError(f"Widget at index {idx} must be a dictionary")
+    #         # Ensure widget_id is present and valid
+    #         if not widget.get("widget_id"):
+    #             raise ValueError(f"Widget at index {idx} must have a valid widget_id")
+
+    #     return v

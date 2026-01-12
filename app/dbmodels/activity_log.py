@@ -25,7 +25,7 @@ from app.core.database import Base
 
 class EntityType(str, Enum):
     """Types of entities that can be logged."""
-
+    DASHBOARD_GROUP="dashboard_group"
     DASHBOARD = "dashboard"
     DASHBOARD_VERSION = "dashboard_version"
     COMMENT = "comment"
@@ -38,6 +38,7 @@ class ActionType(str, Enum):
     """Types of actions that can be performed."""
 
     # Dashboard actions
+    DASHBOARD_GROUP_CREATED="dashboard_group_created"
     DASHBOARD_CREATED = "dashboard_created"
     DASHBOARD_UPDATED = "dashboard_updated"
     DASHBOARD_DELETED = "dashboard_deleted"

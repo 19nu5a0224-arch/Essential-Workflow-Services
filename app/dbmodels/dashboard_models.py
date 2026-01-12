@@ -18,7 +18,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     Enum as SQLEnum,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -35,6 +35,11 @@ class VersionStatus(str, Enum):
     PUBLISHED = "published"
     ARCHIVED = "archived"  # Previous published versions (for history)
 
+class GroupType(str, Enum):
+    """Categorization for the Groups themselves"""
+    MINE = "mine"
+    SHAREDWITHME = "sharedWithMe"
+    SHAREDBYME = "sharedByMe"
 
 class Dashboard(Base):
     """
@@ -52,6 +57,8 @@ class Dashboard(Base):
     dashboard_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
+    group_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), 
+        ForeignKey("dashboard_groups.group_id", ondelete="SET NULL"),  nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -106,6 +113,13 @@ class Dashboard(Base):
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
+
+     
+     #Relationship to Groups
+    group: Mapped[Optional["DashboardGroup"]] = relationship(
+            "DashboardGroup", 
+            back_populates="dashboards"
+        )
 
     # Relationships - CASCADE delete removes all versions when dashboard is deleted
     versions: Mapped[list["DashboardVersion"]] = relationship(
@@ -386,3 +400,54 @@ class DashboardVersion(Base):
             f"<DashboardVersion(id={self.id}, dashboard_id={self.dashboard_id}, "
             f"v{self.version_number}, status={self.status})>"
         )
+
+class DashboardGroup(Base):
+    """
+    Groups multiple dashboards together.
+    Includes a 'group_type' to distinguish between 'mine', 'sharedWithMe', or 'sharedByMe'.
+    """
+    __tablename__ = "dashboard_groups"
+
+    group_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    group_type: Mapped[GroupType] = mapped_column(
+        SQLEnum(GroupType, native_enum=True, name="group_type_enum"),
+        default=GroupType.MINE, nullable=False
+    )
+    dashboard_ids: Mapped[list[uuid.UUID]] = mapped_column(
+        ARRAY(UUID(as_uuid=True)), 
+        server_default="{}", 
+        nullable=False,
+        comment="List of Dashboard UUIDs belonging to this group"
+    )
+
+    # Ownership context
+    owner_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    workspace_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    project_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+        # Relationship to Dashboards
+    dashboards: Mapped[list["Dashboard"]] = relationship(
+        "Dashboard",
+         back_populates="group",
+         cascade="save-update, merge", 
+    )
+
+    # Sharing relationships
+    shares: Mapped[list["Share"]] = relationship(
+        "Share",
+        back_populates="group",
+        foreign_keys="Share.group_id",
+        cascade="all, delete-orphan",
+    )
+    
+
+    def __repr__(self) -> str:
+        return f"<DashboardGroup(name='{self.name}', type='{self.group_type}')>"
+
+
+
